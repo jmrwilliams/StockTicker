@@ -4,70 +4,90 @@ import os
 from datetime import datetime
 
 def lambda_handler(event, context):
-    ticker = event.get('queryStringParameters', {}).get('ticker', '').upper()
+    # Handle both direct invocation and API Gateway
+    query_params = event.get('queryStringParameters') or {}
+    ticker = query_params.get('ticker', '').upper() if query_params else ''
+    
     if not ticker:
-        return {'statusCode': 400, 'body': json.dumps({'error': 'ticker parameter required'})}
+        return {
+            'statusCode': 400,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': 'ticker parameter required'})
+        }
     
     try:
         financials = get_financials(ticker)
         competitive_analysis = get_competitive_analysis(ticker)
         sec_summary = get_sec_summary(ticker)
         
+        response_body = {
+            'ticker': ticker,
+            'financials': financials,
+            'competitive_analysis': competitive_analysis,
+            'sec_summary': sec_summary
+        }
+        
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json'},
-            'body': json.dumps({
-                'ticker': ticker,
-                'financials': financials,
-                'competitive_analysis': competitive_analysis,
-                'sec_summary': sec_summary
-            })
+            'body': json.dumps(response_body)
         }
     except Exception as e:
-        return {'statusCode': 500, 'body': json.dumps({'error': str(e)})}
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': str(e)})
+        }
 
 def get_financials(ticker):
-    # Google Finance API endpoint
-    url = f'https://www.google.com/finance/quote/{ticker}:NASDAQ'
+    # Yahoo Finance API
+    url = f'https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=defaultKeyStatistics,financialData,summaryDetail'
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
-    # Alternative: Use Yahoo Finance API as Google Finance doesn't have public API
-    yahoo_url = f'https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=defaultKeyStatistics,financialData,summaryDetail'
-    response = requests.get(yahoo_url, headers=headers)
-    data = response.json()
-    
-    result = data.get('quoteSummary', {}).get('result', [{}])[0]
-    financial_data = result.get('financialData', {})
-    summary_detail = result.get('summaryDetail', {})
-    key_stats = result.get('defaultKeyStatistics', {})
-    
-    return {
-        'market_cap': str(summary_detail.get('marketCap', {}).get('raw', 'N/A')),
-        'pe_ratio': str(summary_detail.get('trailingPE', {}).get('raw', 'N/A')),
-        'revenue': str(financial_data.get('totalRevenue', {}).get('raw', 'N/A')),
-        'profit_margin': str(financial_data.get('profitMargins', {}).get('raw', 'N/A')),
-        'debt_to_equity': str(financial_data.get('debtToEquity', {}).get('raw', 'N/A'))
-    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        data = response.json()
+        
+        result = data.get('quoteSummary', {}).get('result', [{}])[0]
+        financial_data = result.get('financialData', {})
+        summary_detail = result.get('summaryDetail', {})
+        
+        def safe_get(data_dict, key, default='N/A'):
+            value = data_dict.get(key, {})
+            return str(value.get('raw', default)) if isinstance(value, dict) else str(default)
+        
+        return {
+            'market_cap': safe_get(summary_detail, 'marketCap'),
+            'pe_ratio': safe_get(summary_detail, 'trailingPE'),
+            'revenue': safe_get(financial_data, 'totalRevenue'),
+            'profit_margin': safe_get(financial_data, 'profitMargins'),
+            'debt_to_equity': safe_get(financial_data, 'debtToEquity')
+        }
+    except Exception as e:
+        return {'error': f'Failed to fetch financials: {str(e)}'}
 
 def get_competitive_analysis(ticker):
-    # Get company profile from Yahoo Finance
-    url = f'https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=assetProfile,summaryProfile'
+    url = f'https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=assetProfile'
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    response = requests.get(url, headers=headers)
-    data = response.json()
     
-    result = data.get('quoteSummary', {}).get('result', [{}])[0]
-    profile = result.get('assetProfile', {})
-    
-    sector = profile.get('sector', 'Unknown')
-    industry = profile.get('industry', 'Unknown')
-    
-    return {
-        'sector': sector,
-        'industry': industry,
-        'pe_vs_sector': 'Analysis requires sector benchmark data',
-        'market_position': f'Company operates in {industry} sector'
-    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        data = response.json()
+        
+        result = data.get('quoteSummary', {}).get('result', [{}])[0]
+        profile = result.get('assetProfile', {})
+        
+        sector = profile.get('sector', 'Unknown')
+        industry = profile.get('industry', 'Unknown')
+        
+        return {
+            'sector': sector,
+            'industry': industry,
+            'pe_vs_sector': 'Analysis requires sector benchmark data',
+            'market_position': f'Company operates in {industry} sector'
+        }
+    except Exception as e:
+        return {'error': f'Failed to fetch competitive analysis: {str(e)}'}
 
 def get_sec_summary(ticker):
     # SEC EDGAR API for 10-K filings
